@@ -1,0 +1,53 @@
+#!/bin/bash
+# codehealth — diagnose a git repo's health before diving in
+# Usage: codehealth           (current repo)
+#        codehealth ./path    (target repo)
+
+set -uo pipefail
+
+DIR="${1:-.}"
+cd "$DIR" 2>/dev/null || { echo "Cannot access: $DIR"; exit 1; }
+git rev-parse --git-dir &>/dev/null || { echo "Not a git repo: $DIR"; exit 1; }
+
+{
+  echo "=== HIGH-CHURN FILES (most changed in past year) ==="
+  git log --format=format: --name-only --since="1 year ago" 2>/dev/null | grep -v '^$' | sort | uniq -c | sort -rn | head -20
+
+  echo ""
+  echo "=== BUG HOTSPOTS (files with fix/bug commits) ==="
+  git log -i -E --grep="fix|bug|broken|crash|error" --name-only --format='' --since="1 year ago" 2>/dev/null | grep -v '^$' | sort | uniq -c | sort -rn | head -15
+
+  echo ""
+  echo "=== CONTRIBUTOR DISTRIBUTION ==="
+  git shortlog -sn --no-merges --since="1 year ago" 2>/dev/null | head -15
+
+  echo ""
+  echo "=== MONTHLY COMMIT TREND ==="
+  git log --format='%ad' --date=format:'%Y-%m' --since="1 year ago" 2>/dev/null | sort | uniq -c
+
+  echo ""
+  echo "=== FIREFIGHTING (reverts, hotfixes, rollbacks) ==="
+  FIRES=$(git log --oneline --since="1 year ago" 2>/dev/null | grep -ciE 'revert|hotfix|emergency|rollback|urgent')
+  TOTAL=$(git log --oneline --since="1 year ago" 2>/dev/null | wc -l)
+  echo "$FIRES firefighting commits out of $TOTAL total (past year)"
+  git log --oneline --since="1 year ago" 2>/dev/null | grep -iE 'revert|hotfix|emergency|rollback|urgent' | head -10
+
+  echo ""
+  echo "=== REPO INFO ==="
+  echo "Path: $(pwd)"
+  echo "Branch: $(git branch --show-current 2>/dev/null)"
+  echo "Last commit: $(git log -1 --format='%ar — %s' 2>/dev/null)"
+  echo "Total files: $(git ls-files 2>/dev/null | wc -l)"
+} | llm -s "You are a codebase health analyst. Given git stats for a repository, provide a concise diagnosis.
+
+Format:
+HEALTH SUMMARY: one-sentence overall assessment
+
+RISKS:
+- list top 3-5 risks (bus factor, churn hotspots, bug-prone files, momentum issues)
+
+FOCUS AREAS: the 3-5 files/areas that need the most attention and why
+
+MOMENTUM: is the project active, declining, or spiking? One sentence.
+
+Be terse. No markdown. No preamble." || true
