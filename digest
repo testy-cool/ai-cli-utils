@@ -1,0 +1,62 @@
+#!/bin/bash
+# digest — understand large files or directories via LLM
+# Usage: digest app.py                        (structured overview)
+#        digest app.py "where's the auth"     (targeted question)
+#        digest src/ "how does billing work"  (search across directory)
+#        digest *.py "find the database calls" (glob pattern)
+
+set -uo pipefail
+
+TARGET="$1"
+QUESTION="${2:-}"
+
+# Build the content to send
+if [ -d "$TARGET" ]; then
+  # Directory: concatenate all text files with headers
+  CONTENT=$(find "$TARGET" -type f -maxdepth 4 \
+    -not -path '*/.git/*' -not -path '*/node_modules/*' \
+    -not -path '*/__pycache__/*' -not -path '*/.venv/*' \
+    -not -path '*/dist/*' -not -path '*/build/*' \
+    -not -path '*/.next/*' -not -name '*.lock' \
+    -not -name '*.png' -not -name '*.jpg' -not -name '*.gif' \
+    -not -name '*.ico' -not -name '*.woff*' -not -name '*.ttf' \
+    -not -name '*.mp3' -not -name '*.mp4' -not -name '*.zip' \
+    -not -name '*.tar*' -not -name '*.gz' -not -name '*.db' \
+    -not -name '*.sqlite*' -not -name 'logs.db' \
+    | sort | head -100 | while read -r f; do
+      echo "=== $f ==="
+      head -500 "$f" 2>/dev/null
+      echo ""
+    done)
+elif [[ "$TARGET" == *"*"* ]]; then
+  # Glob pattern
+  CONTENT=$(for f in $TARGET; do
+    [ -f "$f" ] || continue
+    echo "=== $f ==="
+    head -500 "$f" 2>/dev/null
+    echo ""
+  done)
+else
+  # Single file
+  CONTENT=$(cat "$TARGET" 2>/dev/null)
+fi
+
+if [ -z "$CONTENT" ]; then
+  echo "No readable content found in: $TARGET"
+  exit 1
+fi
+
+if [ -n "$QUESTION" ]; then
+  echo "$CONTENT" | llm -m proxy-flash "$QUESTION" || true
+else
+  echo "$CONTENT" | llm -m proxy-flash -s "Analyze this code and provide a structured overview:
+
+PURPOSE: what this code/project does (one sentence)
+STACK: languages, frameworks, libraries detected
+ENTRYPOINTS: main files, entry points, CLI commands
+KEY COMPONENTS: important functions, classes, modules (with file paths if multiple files)
+DATA: databases, APIs, external services used
+PATTERNS: notable design patterns or architecture choices
+
+Be terse. No preamble. Skip sections that don't apply." || true
+fi
