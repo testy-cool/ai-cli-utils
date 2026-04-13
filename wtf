@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+wtf — runtime inspector. Explains what a process, port, service, or path is doing.
+
+Usage:
+  wtf :PORT             What's on this port
+  wtf pid PID           What is this process
+  wtf service NAME      Systemd service status
+  wtf docker [FILTER]   Docker containers
+  wtf path PATH         What is this file/socket
+  wtf THING             Auto-detect (number=pid, file=path, else service)
+EOF
+    exit 1
+}
+
+[[ $# -eq 0 ]] && usage
+
+query_type=""
+target=""
+
+case "$1" in
+    :*)
+        query_type="port"
+        target="${1#:}"
+        ;;
+    pid)
+        query_type="pid"
+        target="${2:?missing PID}"
+        ;;
+    service)
+        query_type="service"
+        target="${2:?missing service name}"
+        ;;
+    docker)
+        query_type="docker"
+        target="${2:-}"
+        ;;
+    path)
+        query_type="path"
+        target="${2:?missing path}"
+        ;;
+    *)
+        # auto-detect
+        if [[ "$1" =~ ^[0-9]+$ ]]; then
+            query_type="pid"
+            target="$1"
+        elif [[ -e "$1" ]]; then
+            query_type="path"
+            target="$1"
+        elif systemctl list-unit-files "${1}.service" &>/dev/null; then
+            query_type="service"
+            target="$1"
+        else
+            echo "Can't figure out what '$1' is. Use: wtf :port | pid N | service NAME | docker | path PATH"
+            exit 1
+        fi
+        ;;
+esac
+
+facts=""
+
+gather() {
+    local label="$1"
+    shift
+    local output
+    output=$("$@" 2>&1) || true
+    if [[ -n "$output" ]]; then
+        facts+="
+=== $label ===
+$output
+"
+    fi
+}
+
+case "$query_type" in
+    port)
+        echo "Inspecting port $target..."
+        gather "ss" ss -tlnp "sport = :${target}"
+        gather "lsof" sudo lsof -i ":${target}" -P -n
+        ;;
+    pid)
+        echo "Inspecting PID $target..."
+        gather "ps" ps -p "$target" -o pid,ppid,user,stat,start,time,cmd --no-headers
+        gather "exe" ls -la "/proc/${target}/exe"
+        gather "fd count" bash -c "ls /proc/${target}/fd 2>/dev/null | wc -l"
+        gather "cgroup" cat "/proc/${target}/cgroup"
+        ;;
+    service)
+        echo "Inspecting service $target..."
+        gather "systemctl status" systemctl status "$target" --no-pager
+        gather "recent logs" journalctl -u "$target" -n 10 --no-pager
+        ;;
+    docker)
+        echo "Inspecting docker containers${target:+ matching '$target'}..."
+        if [[ -n "$target" ]]; then
+            gather "docker ps" bash -c "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}' | head -1; docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}' | grep -i '${target}'"
+        else
+            gather "docker ps" docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}'
+        fi
+        gather "docker stats" docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}'
+        ;;
+    path)
+        echo "Inspecting path $target..."
+        gather "file" file "$target"
+        gather "stat" stat "$target"
+        gather "ls -la" ls -la "$target"
+        gather "lsof" lsof "$target"
+        ;;
+esac
+
+if [[ -z "$facts" ]]; then
+    echo "No information found for $query_type '$target'."
+    exit 1
+fi
+
+SYSTEM_PROMPT="You are a concise runtime inspector. Given diagnostic output about a process, port, service, or file path, explain what's happening in plain English. Include: what it is, who started it, how long it's been running, resource usage if available. Flag anything unusual (zombie processes, high fd count, crashed services). One paragraph max, no markdown."
+
+echo "$facts" | llm -s "$SYSTEM_PROMPT" "Explain this $query_type inspection for '$target':" || true

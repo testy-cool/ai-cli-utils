@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# sumlog — compress logs deterministically, then surface anomalies via LLM
+# Usage: sumlog [file] [-n lines]
+#        command | sumlog [-n lines]
+
+set -euo pipefail
+
+LINES=200
+FILE=""
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -n) LINES="$2"; shift 2 ;;
+        -h|--help)
+            echo "Usage: sumlog [file] [-n lines]"
+            echo "       command | sumlog [-n lines]"
+            echo ""
+            echo "Compresses logs and surfaces anomalies."
+            echo "  -n  Number of lines to analyze (default: 200)"
+            exit 0
+            ;;
+        *) FILE="$1"; shift ;;
+    esac
+done
+
+# Read input: file or stdin
+if [[ -n "$FILE" ]]; then
+    if [[ ! -f "$FILE" ]]; then
+        echo "Error: file not found: $FILE" >&2
+        exit 1
+    fi
+    raw=$(tail -n "$LINES" "$FILE")
+elif [[ ! -t 0 ]]; then
+    raw=$(tail -n "$LINES")
+else
+    echo "Error: no input. Provide a file or pipe data." >&2
+    exit 1
+fi
+
+# Deterministic preprocessing: deduplicate, count, sort by frequency
+# Strip timestamps (common syslog/journalctl formats) for dedup grouping
+compressed=$(echo "$raw" | \
+    sed -E 's/^[A-Z][a-z]{2} [0-9]{1,2} [0-9]{2}:[0-9]{2}:[0-9]{2} //;
+            s/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]* //;
+            s/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]* //' | \
+    sort | uniq -c | sort -rn)
+
+total_lines=$(echo "$raw" | wc -l)
+unique_lines=$(echo "$compressed" | wc -l)
+
+header="=== sumlog: $total_lines lines collapsed to $unique_lines unique patterns ===
+(format: count | message, sorted by frequency)
+"
+
+echo "$header"
+echo "$compressed"
+echo ""
+echo "--- LLM analysis ---"
+
+{
+    echo "$header"
+    echo "$compressed"
+} | llm -s "You are a log analyst. You receive deduplicated, frequency-sorted log lines (count | message).
+
+Your job:
+1. ANOMALIES: identify new error families, unusual patterns, timing changes, anything unexpected
+2. GROUP related entries into logical clusters
+3. TOP 3-5 most important findings, ranked by severity
+4. IMMEDIATE ATTENTION: flag anything that needs action now
+
+Format rules:
+- Terse, no markdown, no bullet decorators
+- Use plain structured sections with CAPS headers
+- One line per finding where possible
+- Include counts from the input to show scale
+- If nothing notable: say 'nothing remarkable' and stop" || true
+
+echo ""
