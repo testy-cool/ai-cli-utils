@@ -1,4 +1,4 @@
-# coreutils-ai
+# ai-cli-utils
 
 > **Unix tools, augmented with LLM inference.** Find relevant files, diagnose errors, summarize diffs — in 1-3 seconds.
 
@@ -79,8 +79,8 @@ Like `tree` but caps each directory at 30 entries. No LLM — pure Python.
 ## Install
 
 ```bash
-git clone https://github.com/testy-cool/coreutils-ai.git
-cd coreutils-ai
+git clone https://github.com/testy-cool/ai-cli-utils.git
+cd ai-cli-utils
 
 # Symlink into your PATH
 for tool in relevant why diffsummary; do
