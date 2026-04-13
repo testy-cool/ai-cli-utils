@@ -1,0 +1,27 @@
+#!/bin/bash
+# why — diagnose errors from stdin
+# Usage: npm install 2>&1 | why
+#        cargo build 2>&1 | why
+#        why < error.log
+
+set -euo pipefail
+
+INPUT=$(cat)
+
+echo "$INPUT" | llm -s "You are an error diagnosis tool. Given stderr/stdout from a failed command:
+
+1. CLASSIFY: dependency | typecheck | test | runtime | network | permission | port conflict | config | migration | git | other
+2. ROOT CAUSE: extract the first real fault, not the last noisy line
+3. CONFIDENCE: high | medium | low
+4. FIX: the most likely fix in one sentence
+5. COMMAND: the exact next command to run
+
+You MUST use this exact format, no exceptions:
+
+[TYPE] root cause in one line
+Confidence: high | medium | low
+Fix: what to do
+Run: the exact command
+
+TYPE must be one of: dependency | typecheck | test | runtime | network | permission | port conflict | config | migration | git | other
+No preamble. No markdown. No extra text." || true

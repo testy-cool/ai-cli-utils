@@ -1,0 +1,42 @@
+#!/bin/bash
+# relevant — find files relevant to a task description
+# Usage: relevant "fix the login bug"
+#        relevant "add dark mode support" ./src
+
+set -uo pipefail
+
+TASK="$1"
+DIR="${2:-.}"
+
+# Gather facts from three sources: tree, filename matches, content grep, recency
+{
+  echo "=== FILE TREE ==="
+  tree -L 3 --dirsfirst -I "node_modules|.git|__pycache__|.venv|dist|build|.next|coverage|file-history|sessions|*.lock|logs.db" "$DIR" 2>/dev/null | head -300
+
+  echo ""
+  echo "=== FILENAME MATCHES ==="
+  KEYWORDS=$(echo "$TASK" | tr ' ' '\n' | grep -vEi '^(the|a|an|to|in|for|of|and|or|is|it|fix|add|update|change|make|with|that|this|from|into|when|how|bug|issue|error|new|should|need|want)$' | head -5)
+  for word in $KEYWORDS; do
+    find "$DIR" -maxdepth 6 -iname "*${word}*" -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/__pycache__/*' -not -path '*/cache/*' 2>/dev/null | head -15
+  done | sort -u | head -30
+
+  echo ""
+  echo "=== CONTENT MATCHES ==="
+  for word in $KEYWORDS; do
+    rg -l -i "$word" "$DIR" --type-not binary --max-depth 6 -g '!{node_modules,.git,__pycache__,.venv,dist,build,.next,coverage,*.lock,logs.db,*.log}' 2>/dev/null | head -15
+  done | sort -u | head -30
+
+  echo ""
+  echo "=== RECENTLY MODIFIED ==="
+  find "$DIR" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/__pycache__/*' -not -path '*/file-history/*' -not -path '*/sessions/*' -not -path '*/cache/*' -not -name '*.lock' -not -name 'logs.db' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -10 | cut -d' ' -f2-
+} | llm -s "You are a file ranker. Given a task and codebase data, return relevant files.
+
+TASK: $TASK
+
+STRICT RULES:
+- ONLY list files that appear in the data above. NEVER invent or guess file paths.
+- Return 5-15 files max, one per line
+- Format: path — reason (one short sentence)
+- Most relevant first
+- No preamble, no markdown, no explanations, no numbering
+- If no files are relevant, say 'No relevant files found'" || true

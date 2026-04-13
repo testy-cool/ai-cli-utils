@@ -1,0 +1,29 @@
+#!/bin/bash
+# diffsummary — structured summary of git changes
+# Usage: diffsummary          (staged + unstaged)
+#        diffsummary HEAD~3   (last 3 commits)
+#        git diff | diffsummary
+
+set -uo pipefail
+
+if [ $# -gt 0 ]; then
+  DIFF=$(git diff "$1" 2>&1)
+elif [ ! -t 0 ]; then
+  DIFF=$(cat)
+else
+  DIFF=$(git diff HEAD 2>&1)
+  [ -z "$DIFF" ] && DIFF=$(git diff --cached 2>&1)
+fi
+
+[ -z "$DIFF" ] && echo "No changes found." && exit 0
+
+echo "$DIFF" | llm -s "You are a diff analysis tool. Given a git diff, produce a structured summary:
+
+FILES CHANGED: list each file and what changed in it (one line each)
+BEHAVIOR CHANGES: what the code does differently now
+API CHANGES: any changed interfaces, endpoints, function signatures (or 'None')
+RISK AREAS: anything that could break
+TESTS: added/missing/modified (or 'None')
+COMMIT TITLE: 1-2 candidate commit message titles (effect-framed, not file-framed)
+
+Be terse. No preamble. Skip sections that are empty." || true
